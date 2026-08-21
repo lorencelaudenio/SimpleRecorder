@@ -353,11 +353,11 @@ func recordingBeep() {
                     systemSymbolName:
                         "video.circle.fill",
                     accessibilityDescription:
-                        "Studio Recorder"
+                        "SImple Recorder"
                 )
 
             button.toolTip =
-                "Studio Recorder"
+                "SImple Recorder"
         }
 
         menu = NSMenu()
@@ -367,7 +367,7 @@ func recordingBeep() {
         recordMenuItem =
             NSMenuItem(
                 title:
-                    "Start Studio Recording",
+                    "Start SImple Recording",
                 action:
                     #selector(
                         toggleRecording
@@ -450,7 +450,7 @@ func recordingBeep() {
         let quitItem =
             NSMenuItem(
                 title:
-                    "Quit Studio Recorder",
+                    "Quit SImple Recorder",
                 action:
                     #selector(
                         NSApplication.terminate(_:)
@@ -2075,14 +2075,14 @@ cameraAnimationLock.unlock()
                     self.isFinalizingRecording = false
 
                     self.recordMenuItem.title =
-                        "Start Studio Recording"
+                        "Start SImple Recording"
 
                     if let button = self.statusItem.button {
                         button.image = NSImage(
                             systemSymbolName:
                                 "video.circle.fill",
                             accessibilityDescription:
-                                "Studio Recorder"
+                                "SImple Recorder"
                         )
                         button.contentTintColor = nil
                     }
