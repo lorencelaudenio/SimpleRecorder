@@ -1,4 +1,4 @@
-# SimpleRecorder
+# Simple Screen Recorder for MacOS
 
 SimpleRecorder is a lightweight macOS menu bar app for recording your screen with optional microphone audio and a floating camera view. It also provides activity-based zoom and click effects for clearer demonstrations.
 
