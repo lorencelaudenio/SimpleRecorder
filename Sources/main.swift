@@ -118,6 +118,7 @@ let cameraExpandAnimationDuration: TimeInterval = 0.5
 var cameraAnimStartRect: CGRect = .zero
 var cameraAnimTargetRect: CGRect = .zero
 var cameraAnimStartTime: Date = Date()
+var cameraNormalWindowFrame: NSRect?
 
 let cameraAnimationLock = NSLock()
 
@@ -774,6 +775,11 @@ func recordingBeep() {
             previewLayer?.frame =
                 contentView.bounds
 
+            previewLayer?.autoresizingMask = [
+                .layerWidthSizable,
+                .layerHeightSizable
+            ]
+
             previewLayer?.videoGravity =
                 .resizeAspectFill
 
@@ -1105,6 +1111,13 @@ self.cameraAnimationLock.unlock()
 
                     guard let self = self,
                           self.isWriting else {
+                        return
+                    }
+
+                    if let cameraWindow = self.floatCamWindow,
+                       cameraWindow.frame.contains(
+                           NSEvent.mouseLocation
+                       ) {
                         return
                     }
 
@@ -1739,15 +1752,52 @@ func processCameraHover() {
 
 func expandCamera() {
 
+    guard Thread.isMainThread else {
+        DispatchQueue.main.async { [weak self] in
+            self?.expandCamera()
+        }
+        return
+    }
+
+    guard let cameraWindow = floatCamWindow else {
+        return
+    }
+
+    let normalWindowFrame =
+        cameraWindow.frame
+
+    let currentRect =
+        computeNormalCameraRectInOutput(
+            windowFrame:
+                normalWindowFrame
+        )
+        ?? cameraAnimTargetRect
+
+    let screenFrame =
+        NSScreen.screens.first {
+            screen in
+
+            guard let number =
+                screen.deviceDescription[
+                    NSDeviceDescriptionKey(
+                        "NSScreenNumber"
+                    )
+                ] as? NSNumber else {
+                return false
+            }
+
+            return CGDirectDisplayID(
+                number.uint32Value
+            ) == selectedDisplay?.displayID
+        }?.frame
+        ?? cameraWindow.frame
+
     cameraAnimationLock.lock()
 
     guard !isCameraExpanded else {
         cameraAnimationLock.unlock()
         return
     }
-
-    let currentRect =
-        cameraAnimTargetRect
 
     cameraAnimStartRect =
         currentRect
@@ -1763,13 +1813,43 @@ func expandCamera() {
     cameraAnimStartTime =
         Date()
 
+    cameraNormalWindowFrame =
+        normalWindowFrame
+
     isCameraExpanded =
         true
 
     cameraAnimationLock.unlock()
+
+    cameraWindow.contentView?.layer?.cornerRadius = 0
+    previewLayer?.cornerRadius = 0
+
+    NSAnimationContext.runAnimationGroup {
+        context in
+
+        context.duration =
+            cameraExpandAnimationDuration
+
+        cameraWindow.animator().setFrame(
+            screenFrame,
+            display:
+                true
+        )
+    }
 }
 
 func collapseCamera() {
+
+    guard Thread.isMainThread else {
+        DispatchQueue.main.async { [weak self] in
+            self?.collapseCamera()
+        }
+        return
+    }
+
+    guard let cameraWindow = floatCamWindow else {
+        return
+    }
 
     cameraAnimationLock.lock()
 
@@ -1781,8 +1861,15 @@ func collapseCamera() {
     let currentRect =
         cameraAnimTargetRect
 
+    let normalWindowFrame =
+        cameraNormalWindowFrame
+        ?? cameraWindow.frame
+
     let normalRect =
-        computeNormalCameraRectInOutput()
+        computeNormalCameraRectInOutput(
+            windowFrame:
+                normalWindowFrame
+        )
         ?? .zero
 
     cameraAnimStartRect =
@@ -1798,6 +1885,24 @@ func collapseCamera() {
         false
 
     cameraAnimationLock.unlock()
+
+    cameraWindow.contentView?.layer?.cornerRadius =
+        70
+    previewLayer?.cornerRadius =
+        70
+
+    NSAnimationContext.runAnimationGroup {
+        context in
+
+        context.duration =
+            cameraExpandAnimationDuration
+
+        cameraWindow.animator().setFrame(
+            normalWindowFrame,
+            display:
+                true
+        )
+    }
 }
 
 func getCameraExpandedState() -> Bool {
@@ -1982,6 +2087,10 @@ func getCameraExpandedState() -> Bool {
 
         zoomIdleTimer?.invalidate()
         zoomIdleTimer = nil
+
+        if getCameraExpandedState() {
+            collapseCamera()
+        }
 
     cameraAnimationLock.lock()
 
@@ -2252,11 +2361,16 @@ cameraAnimationLock.unlock()
 
         // Crop and render
 
+        let cameraWindowFrame =
+            currentCameraWindowFrame()
+
         if let croppedBuffer =
             cropAndResizePixelBuffer(
                 imageBuffer,
                 sourceRect:
-                    newRect
+                    newRect,
+                cameraWindowFrame:
+                    cameraWindowFrame
             ) {
 
             pixelBufferAdaptor?.append(
@@ -2271,7 +2385,8 @@ cameraAnimationLock.unlock()
 
     func cropAndResizePixelBuffer(
         _ pixelBuffer: CVPixelBuffer,
-        sourceRect: CGRect
+        sourceRect: CGRect,
+        cameraWindowFrame: CGRect?
     ) -> CVPixelBuffer? {
 
         let bufferHeight =
@@ -2357,7 +2472,9 @@ cameraAnimationLock.unlock()
         let cameraComposited =
             compositeCameraOverlay(
                 on:
-                    scaled
+                    scaled,
+                cameraWindowFrame:
+                    cameraWindowFrame
             )
 
         // Click effect last
@@ -2587,7 +2704,25 @@ cameraAnimationLock.unlock()
         )
     }
 
-    func computeNormalCameraRectInOutput()
+    func currentCameraWindowFrame()
+    -> CGRect? {
+
+        guard floatCamWindow != nil else {
+            return nil
+        }
+
+        if Thread.isMainThread {
+            return floatCamWindow.frame
+        }
+
+        return DispatchQueue.main.sync {
+            floatCamWindow.frame
+        }
+    }
+
+    func computeNormalCameraRectInOutput(
+        windowFrame: CGRect? = nil
+    )
     -> CGRect? {
 
     guard let display =
@@ -2633,7 +2768,7 @@ cameraAnimationLock.unlock()
         screen.frame
 
     let windowFrame =
-        floatCamWindow.frame
+        windowFrame ?? floatCamWindow.frame
 
     let relativeX =
         windowFrame.origin.x -
@@ -2708,11 +2843,16 @@ cameraAnimationLock.unlock()
 
     // MARK: - Camera Position
 
-    func computeCameraOverlayRectInOutput()
+    func computeCameraOverlayRectInOutput(
+        cameraWindowFrame: CGRect?
+    )
     -> CGRect? {
 
     guard let normalRect =
-            computeNormalCameraRectInOutput()
+            computeNormalCameraRectInOutput(
+                windowFrame:
+                    cameraWindowFrame
+            )
     else {
         return nil
     }
@@ -2735,12 +2875,23 @@ cameraAnimationLock.unlock()
     let startTime =
         cameraAnimStartTime
 
+    let expanded =
+        isCameraExpanded
+
     cameraAnimationLock.unlock()
 
     let elapsed =
         Date().timeIntervalSince(
             startTime
         )
+
+    if elapsed >=
+            cameraExpandAnimationDuration {
+
+        return expanded
+            ? targetRect
+            : normalRect
+    }
 
     let progress =
         CGFloat(
@@ -2793,84 +2944,25 @@ cameraAnimationLock.unlock()
     // MARK: - Camera Composite
 
     func compositeCameraOverlay(
-        on baseImage: CIImage
+        on baseImage: CIImage,
+        cameraWindowFrame: CGRect?
     ) -> CIImage {
 
         guard let overlayRect =
-                computeCameraOverlayRectInOutput(),
+                computeCameraOverlayRectInOutput(
+                    cameraWindowFrame:
+                        cameraWindowFrame
+                ),
               overlayRect.width > 10,
               overlayRect.height > 10 else {
 
             return baseImage
         }
 
-        // MARK: Camera Animation
+        // Use the position calculated from this frame's window snapshot.
 
-cameraAnimationLock.lock()
-
-let startRect =
-    cameraAnimStartRect
-
-let targetRect =
-    cameraAnimTargetRect
-
-let animationStart =
-    cameraAnimStartTime
-
-cameraAnimationLock.unlock()
-
-let elapsed =
-    Date().timeIntervalSince(
-        animationStart
-    )
-
-let progress =
-    min(
-        max(
-            CGFloat(
-                elapsed /
-                cameraExpandAnimationDuration
-            ),
-            0
-        ),
-        1
-    )
-
-let eased =
-    easeInOutCubic(
-        progress
-    )
-
-let animatedRect =
-    CGRect(
-        x:
-            startRect.origin.x +
-            (
-                targetRect.origin.x -
-                startRect.origin.x
-            ) * eased,
-
-        y:
-            startRect.origin.y +
-            (
-                targetRect.origin.y -
-                startRect.origin.y
-            ) * eased,
-
-        width:
-            startRect.width +
-            (
-                targetRect.width -
-                startRect.width
-            ) * eased,
-
-        height:
-            startRect.height +
-            (
-                targetRect.height -
-                startRect.height
-            ) * eased
-    )
+        let animatedRect =
+            overlayRect
 
         cameraFrameLock.lock()
 
