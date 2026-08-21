@@ -5,8 +5,10 @@ APP_NAME="SimpleRecorder"
 BUILD_DIR="build"
 APP_BUNDLE="$BUILD_DIR/$APP_NAME.app"
 ICON_FILE="AppIcon.icns"
-DMG_DIR="$BUILD_DIR/dmg"
+DMG_DIR="$(mktemp -d)"
 DMG_FILE="$BUILD_DIR/$APP_NAME.dmg"
+
+trap 'rm -rf "$DMG_DIR"' EXIT
 
 echo "=== Cleaning previous build ==="
 
