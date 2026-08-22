@@ -165,9 +165,9 @@ let cameraAnimationLock = NSLock()
 
     var zoomAnimStartTime: Date = Date()
 
-    let zoomAnimDuration: Double = 0.55
-    let zoomFollowDuration: Double = 0.06
-    var activeZoomAnimDuration: Double = 0.55
+    let zoomAnimDuration: Double = 0.65
+    let zoomFollowDuration: Double = 0.15
+    var activeZoomAnimDuration: Double = 0.65
     let zoomIdleDelay: TimeInterval = 1.0
 
     var lastActionTime: Date = .distantPast
@@ -181,7 +181,7 @@ let cameraAnimationLock = NSLock()
     var lastClickPoint: CGPoint?
     var clickEffectStartTime: Date?
 
-    let clickEffectDuration: Double = 0.38
+    let clickEffectDuration: Double = 0.6
 
     // MARK: - Event Monitors
 
@@ -1974,6 +1974,43 @@ func getCameraExpandedState() -> Bool {
             inverse
     }
 
+    func easeInOutQuart(
+        _ value: CGFloat
+    ) -> CGFloat {
+
+        let t =
+            max(
+                0,
+                min(
+                    value,
+                    1
+                )
+            )
+
+        if t < 0.5 {
+
+            return
+                8 *
+                t *
+                t *
+                t *
+                t
+
+        } else {
+
+            let f =
+                t - 1
+
+            return
+                1 -
+                8 *
+                f *
+                f *
+                f *
+                f
+        }
+    }
+
     // MARK: - Audio Capture
 
     func setupAudioCapture() {
@@ -2283,7 +2320,7 @@ cameraAnimationLock.unlock()
             : 1
 
         let eased =
-            easeInOutCubic(
+            easeInOutQuart(
                 progress
             )
 
@@ -2562,17 +2599,17 @@ cameraAnimationLock.unlock()
             )
 
         let eased =
-            easeOutCubic(
+            easeInOutQuart(
                 progress
             )
 
         // Ripple
 
         let startRadius:
-            CGFloat = 6
+            CGFloat = 8
 
         let endRadius:
-            CGFloat = 38
+            CGFloat = 60
 
         let radius =
             startRadius +
@@ -2906,7 +2943,7 @@ cameraAnimationLock.unlock()
         )
 
     let eased =
-        easeInOutCubic(
+        easeInOutQuart(
             progress
         )
 
