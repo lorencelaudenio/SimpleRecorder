@@ -166,9 +166,14 @@ let cameraAnimationLock = NSLock()
     var zoomAnimStartTime: Date = Date()
 
     let zoomAnimDuration: Double = 0.65
-    let zoomFollowDuration: Double = 0.15
+    let zoomFollowDuration: Double = 0.25
     var activeZoomAnimDuration: Double = 0.65
     let zoomIdleDelay: TimeInterval = 1.0
+
+    // Smooth mouse follow
+    var mouseFollowZoomEnabled: Bool = false
+    var lastMouseFollowUpdate: Date = Date()
+    let mouseFollowUpdateInterval: TimeInterval = 0.033  // ~30fps for smooth follow
 
     var lastActionTime: Date = .distantPast
     var lastActivityTime: Date = .distantPast
@@ -1032,6 +1037,9 @@ self.zoomAnimStartTime =
 
 self.zoomLock.unlock()
 
+// Reset mouse follow
+self.lastMouseFollowUpdate = Date()
+
 
 // Reset click effect
 
@@ -1582,59 +1590,80 @@ AVVideoHeightKey:
 
     func updateTargetZoomToMouse() {
 
-    guard let displayPoint =
-        convertGlobalPointToSelectedDisplayPixels(
-            NSEvent.mouseLocation
-        ) else {
-
-        return
-    }
-
-    let maxX =
-        max(
-            0,
-            displayBounds.width -
-                focusZoomWidth
+        let now = Date()
+        let elapsed = now.timeIntervalSince(
+            lastMouseFollowUpdate
         )
+        
+        // Only update zoom position at ~30fps for smoothness
+        guard elapsed >= mouseFollowUpdateInterval else {
+            return
+        }
+        
+        lastMouseFollowUpdate = now
 
-    let maxY =
-        max(
-            0,
-            displayBounds.height -
-                focusZoomHeight
-        )
+        guard let displayPoint =
+            convertGlobalPointToSelectedDisplayPixels(
+                NSEvent.mouseLocation
+            ) else {
+            return
+        }
 
-    let tx =
-        max(
-            0,
-            min(
-                displayPoint.x -
-                    focusZoomWidth / 2,
-                maxX
+        let maxX =
+            max(
+                0,
+                displayBounds.width -
+                    focusZoomWidth
             )
-        )
 
-    let ty =
-        max(
-            0,
-            min(
-                displayPoint.y -
-                    focusZoomHeight / 2,
-                maxY
+        let maxY =
+            max(
+                0,
+                displayBounds.height -
+                    focusZoomHeight
             )
-        )
 
-    setZoomTarget(
-        CGRect(
+        let tx =
+            max(
+                0,
+                min(
+                    displayPoint.x -
+                        focusZoomWidth / 2,
+                    maxX
+                )
+            )
+
+        let ty =
+            max(
+                0,
+                min(
+                    displayPoint.y -
+                        focusZoomHeight / 2,
+                    maxY
+                )
+            )
+
+        let newTarget = CGRect(
             x: tx,
             y: ty,
             width: focusZoomWidth,
             height: focusZoomHeight
-        ),
-        animationDuration:
-            zoomFollowDuration
-    )
-}
+        )
+
+        // Only trigger new animation if position changed significantly
+        zoomLock.lock()
+        let current = currentSourceRect
+        zoomLock.unlock()
+
+        let _ = abs(newTarget.origin.x - current.origin.x)
+        let _ = abs(newTarget.origin.y - current.origin.y)
+
+        // Update more frequently with shorter duration for smooth mouse follow
+        setZoomTarget(
+            newTarget,
+            animationDuration: 0.12
+        )
+    }
 
     // MARK: - Set Zoom Target
 
