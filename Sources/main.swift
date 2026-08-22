@@ -178,6 +178,10 @@ let cameraAnimationLock = NSLock()
     var lastActionTime: Date = .distantPast
     var lastActivityTime: Date = .distantPast
     var zoomIdleTimer: Timer?
+    var recordingIndicatorTimer: Timer?
+
+    // MARK: - Recording Indicator Animation
+    var recordingIndicatorPhase: CGFloat = 0
 
     // MARK: - Click Effect
 
@@ -1497,6 +1501,8 @@ AVVideoHeightKey:
                 }
             }
 
+            // Start recording indicator animation
+            self.startRecordingIndicatorAnimation()
 
         }
     }
@@ -2249,6 +2255,8 @@ cameraAnimationLock.unlock()
                     self.baseStartTime = nil
                     self.isFinalizingRecording = false
 
+                    self.stopRecordingIndicatorAnimation()
+
                     self.recordMenuItem.title =
                         "Start SImple Recording"
 
@@ -2272,6 +2280,55 @@ cameraAnimationLock.unlock()
                 }
             }
         }
+    }
+
+    // MARK: - Recording Indicator Animation
+
+    func startRecordingIndicatorAnimation() {
+        recordingIndicatorTimer?.invalidate()
+        recordingIndicatorTimer = Timer.scheduledTimer(
+            withTimeInterval: 0.05, // 20fps for smooth animation
+            repeats: true
+        ) { [weak self] _ in
+            self?.updateRecordingIndicator()
+        }
+    }
+
+    func stopRecordingIndicatorAnimation() {
+        recordingIndicatorTimer?.invalidate()
+        recordingIndicatorTimer = nil
+        recordingIndicatorPhase = 0
+    }
+
+    func updateRecordingIndicator() {
+        guard isRecording else {
+            stopRecordingIndicatorAnimation()
+            return
+        }
+
+        // Update phase for pulsing animation
+        recordingIndicatorPhase += 0.15
+
+        // Calculate pulsing alpha using sine wave
+        let pulse = (sin(recordingIndicatorPhase) + 1) / 2 // 0 to 1
+        let alpha = 0.5 + pulse * 0.5 // 0.5 to 1
+
+        guard let button = statusItem.button else {
+            return
+        }
+
+        // Create a pulsing red indicator effect
+        // by using the stop.circle.fill symbol with varying opacity
+        let systemImage = NSImage(
+            systemSymbolName: "stop.circle.fill",
+            accessibilityDescription: "Recording Active"
+        )
+
+        systemImage?.isTemplate = true
+
+        // Apply red tint with pulsing alpha
+        let redColor = NSColor.systemRed.withAlphaComponent(alpha)
+        button.contentTintColor = redColor
     }
 
     // MARK: - Screen Capture Output
