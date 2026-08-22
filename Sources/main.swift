@@ -88,7 +88,15 @@ class AppDelegate: NSObject,
     var isFinalizingRecording = false
     var isStartingRecording = false
 
+    let recordingStateLock = NSLock()
+
     var baseStartTime: CMTime?
+
+    var recordedFrameCount = 0
+
+    var currentRecordingOutputURL: URL?
+
+    var attemptedStreamStartRetry = false
 
     // MARK: - Floating Camera
 
@@ -1260,6 +1268,15 @@ self.cameraAnimationLock.unlock()
                     "StudioRecording-\(UUID().uuidString).mp4"
                 )
 
+            self.currentRecordingOutputURL =
+                outputPath
+
+            self.recordedFrameCount =
+                0
+
+            self.attemptedStreamStartRetry =
+                false
+
             try? FileManager.default.removeItem(
                 at:
                     outputPath
@@ -1364,6 +1381,9 @@ AVVideoHeightKey:
 
             // MARK: Audio
 
+            let audioCharacteristic =
+                self.audioInputFormatCharacteristic()
+
             let audioSettings:
                 [String: Any] = [
 
@@ -1371,10 +1391,10 @@ AVVideoHeightKey:
                         kAudioFormatMPEG4AAC,
 
                     AVNumberOfChannelsKey:
-                        2,
+                        audioCharacteristic.channelCount,
 
                     AVSampleRateKey:
-                        44100.0,
+                        audioCharacteristic.sampleRate,
 
                     AVEncoderBitRateKey:
                         128000
@@ -1419,6 +1439,39 @@ AVVideoHeightKey:
                 print(
                     "Could not start video writer: \(String(describing: self.videoWriter?.error))"
                 )
+
+                self.videoWriter?
+                    .cancelWriting()
+                self.videoWriter =
+                    nil
+                self.videoWriterInput =
+                    nil
+                self.audioWriterInput =
+                    nil
+                self.pixelBufferAdaptor =
+                    nil
+
+                if let outputURL =
+                    self.currentRecordingOutputURL {
+
+                    try? FileManager.default.removeItem(
+                        at:
+                            outputURL
+                    )
+                }
+
+                self.currentRecordingOutputURL =
+                    nil
+                self.recordedFrameCount =
+                    0
+
+                self.stream?
+                    .stopCapture(
+                        completionHandler:
+                            nil
+                    )
+                self.stream =
+                    nil
 
                 return
             }
@@ -1475,7 +1528,63 @@ AVVideoHeightKey:
                     )
 
                     DispatchQueue.main.async {
-                        self?.stopRecording()
+
+                        guard let self = self else {
+                            return
+                        }
+
+                        // Transient failures are common on first start.
+                        // Retry the capture once before giving up.
+
+                        if !self.attemptedStreamStartRetry {
+
+                            self.attemptedStreamStartRetry =
+                                true
+
+                            print(
+                                "Retrying capture start..."
+                            )
+
+                            DispatchQueue.main.asyncAfter(
+                                deadline:
+                                    .now() + 0.5
+                            ) {
+
+                                guard self.isWriting,
+                                      let stream = self.stream else {
+                                    return
+                                }
+
+                                stream.startCapture {
+                                    [weak self] retryError in
+
+                                    DispatchQueue.main.async {
+
+                                        guard let self = self else {
+                                            return
+                                        }
+
+                                        if let retryError =
+                                            retryError {
+
+                                            print(
+                                                "Capture retry failed: \(retryError)"
+                                            )
+
+                                            self.abortRecording()
+                                        } else {
+
+                                            print(
+                                                "Capture started after retry"
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+
+                            self.abortRecording()
+                        }
                     }
                 }
             }
@@ -1859,6 +1968,11 @@ func expandCamera() {
     cameraWindow.contentView?.layer?.cornerRadius = 0
     previewLayer?.cornerRadius = 0
 
+    // Green border is only for the compact bubble —
+    // remove it in the expanded state.
+
+    cameraWindow.contentView?.layer?.borderWidth = 0
+
     NSAnimationContext.runAnimationGroup {
         context in
 
@@ -1925,6 +2039,11 @@ func collapseCamera() {
         70
     previewLayer?.cornerRadius =
         70
+
+    // Restore the green bubble border.
+
+    cameraWindow.contentView?.layer?.borderWidth =
+        3
 
     NSAnimationContext.runAnimationGroup {
         context in
@@ -2047,6 +2166,86 @@ func getCameraExpandedState() -> Bool {
     }
 
     // MARK: - Audio Capture
+
+    func audioInputFormatCharacteristic() -> (
+        sampleRate: Double,
+        channelCount: Int
+    ) {
+
+        var selectedTitle =
+            ""
+
+        for item in micMenu.items {
+
+            if item.state == .on {
+
+                selectedTitle =
+                    item.title
+
+                break
+            }
+        }
+
+        let discoverySession =
+            AVCaptureDevice.DiscoverySession(
+                deviceTypes: [
+                    .builtInMicrophone,
+                    .externalUnknown
+                ],
+                mediaType:
+                    .audio,
+                position:
+                    .unspecified
+            )
+
+        let device =
+            discoverySession.devices.first {
+                $0.localizedName ==
+                selectedTitle
+            }
+            ??
+            AVCaptureDevice.default(
+                for:
+                    .audio
+            )
+
+        if let device {
+
+            let formatDescription =
+                device.activeFormat.formatDescription
+
+            if CMFormatDescriptionGetMediaType(
+                formatDescription
+            ) == kCMMediaType_Audio,
+               let asbd =
+                CMAudioFormatDescriptionGetStreamBasicDescription(
+                    formatDescription
+               ) {
+
+                let rate =
+                    asbd.pointee.mSampleRate
+
+                let channels =
+                    asbd.pointee.mChannelsPerFrame
+
+                if rate > 0,
+                   channels > 0 {
+
+                    return (
+                        rate,
+                        Int(
+                            channels
+                        )
+                    )
+                }
+            }
+        }
+
+        return (
+            44100.0,
+            2
+        )
+    }
 
     func setupAudioCapture() {
 
@@ -2237,48 +2436,237 @@ cameraAnimationLock.unlock()
                 return
             }
 
+            guard let writer =
+                self.videoWriter else {
+
+                DispatchQueue.main.async {
+                    self.resetRecordingState()
+                }
+
+                return
+            }
+
+            self.recordingStateLock.lock()
+            let frameCount =
+                self.recordedFrameCount
+            self.recordingStateLock.unlock()
+
+            // No frames were captured at all (e.g. started and stopped too
+            // quickly, or capture never began). Finalizing would produce a
+            // damaged/empty file, so cancel and clean up instead.
+
+            if frameCount == 0 {
+
+                writer.cancelWriting()
+
+                if let outputURL =
+                    self.currentRecordingOutputURL {
+
+                    try? FileManager.default.removeItem(
+                        at:
+                            outputURL
+                    )
+                }
+
+                DispatchQueue.main.async {
+
+                    print(
+                        "Recording aborted - no frames were captured."
+                    )
+
+                    self.resetRecordingState()
+                }
+
+                return
+            }
+
+            if writer.status == .failed {
+
+                if let outputURL =
+                    self.currentRecordingOutputURL {
+
+                    try? FileManager.default.removeItem(
+                        at:
+                            outputURL
+                    )
+                }
+
+                DispatchQueue.main.async {
+
+                    print(
+                        "Recording writer failed: \(String(describing: writer.error))"
+                    )
+
+                    self.resetRecordingState()
+                }
+
+                return
+            }
+
             self.videoWriterInput?.markAsFinished()
             self.audioWriterInput?.markAsFinished()
 
-            self.videoWriter?.finishWriting {
+            writer.finishWriting {
                 DispatchQueue.main.async {
 
-                    let writerStatus = self.videoWriter?.status
-                    let writerError = self.videoWriter?.error
+                    let writerStatus =
+                        self.videoWriter?.status
 
-                    self.videoWriter = nil
-                    self.videoWriterInput = nil
-                    self.audioWriterInput = nil
-                    self.pixelBufferAdaptor = nil
-                    self.stream = nil
-                    self.isSessionStarted = false
-                    self.baseStartTime = nil
-                    self.isFinalizingRecording = false
-
-                    self.stopRecordingIndicatorAnimation()
-
-                    self.recordMenuItem.title =
-                        "Start SImple Recording"
-
-                    if let button = self.statusItem.button {
-                        button.image = NSImage(
-                            systemSymbolName:
-                                "video.circle.fill",
-                            accessibilityDescription:
-                                "SImple Recorder"
-                        )
-                        button.contentTintColor = nil
-                    }
+                    let writerError =
+                        self.videoWriter?.error
 
                     if writerStatus == .completed {
-                        print("Recording saved successfully!")
+
+                        print(
+                            "Recording saved successfully!"
+                        )
                     } else {
+
+                        // Do not leave a damaged file behind.
+
+                        if let outputURL =
+                            self.currentRecordingOutputURL {
+
+                            try? FileManager.default.removeItem(
+                                at:
+                                    outputURL
+                            )
+                        }
+
                         print(
                             "Recording failed: \(String(describing: writerError))"
                         )
                     }
+
+                    self.resetRecordingState()
                 }
             }
+        }
+    }
+
+    func abortRecording() {
+
+        guard !isFinalizingRecording else {
+            return
+        }
+
+        isFinalizingRecording =
+            true
+
+        isWriting =
+            false
+
+        isRecording =
+            false
+
+        zoomIdleTimer?.invalidate()
+        zoomIdleTimer =
+            nil
+
+        if let monitor = mouseClickMonitor {
+            NSEvent.removeMonitor(
+                monitor
+            )
+            mouseClickMonitor =
+                nil
+        }
+
+        if let monitor = mouseMoveMonitor {
+            NSEvent.removeMonitor(
+                monitor
+            )
+            mouseMoveMonitor =
+                nil
+        }
+
+        audioCaptureSession?
+            .stopRunning()
+        audioCaptureSession =
+            nil
+
+        cameraExpandButton?.isHidden =
+            true
+
+        if let outputURL =
+            currentRecordingOutputURL {
+
+            try? FileManager.default.removeItem(
+                at:
+                    outputURL
+            )
+        }
+
+        currentRecordingOutputURL =
+            nil
+
+        videoWriter?
+            .cancelWriting()
+
+        if let activeStream = stream {
+
+            activeStream.stopCapture {
+                [weak self] _ in
+                self?.stream = nil
+            }
+        } else {
+            stream =
+                nil
+        }
+
+        resetRecordingState()
+
+        print(
+            "Recording aborted - nothing was saved."
+        )
+    }
+
+    func resetRecordingState() {
+
+        stopRecordingIndicatorAnimation()
+
+        videoWriter =
+            nil
+        videoWriterInput =
+            nil
+        audioWriterInput =
+            nil
+        pixelBufferAdaptor =
+            nil
+
+        stream =
+            nil
+
+        isSessionStarted =
+            false
+        baseStartTime =
+            nil
+        isFinalizingRecording =
+            false
+        isStartingRecording =
+            false
+        recordedFrameCount =
+            0
+        currentRecordingOutputURL =
+            nil
+        attemptedStreamStartRetry =
+            false
+
+        recordMenuItem.title =
+            "Start SImple Recording"
+
+        if let button =
+            statusItem.button {
+
+            button.image =
+                NSImage(
+                    systemSymbolName:
+                        "video.circle.fill",
+                    accessibilityDescription:
+                        "SImple Recorder"
+                )
+
+            button.contentTintColor =
+                nil
         }
     }
 
@@ -2501,6 +2889,10 @@ cameraAnimationLock.unlock()
                 withPresentationTime:
                     sampleBuffer.presentationTimeStamp
             )
+
+            recordingStateLock.lock()
+            recordedFrameCount += 1
+            recordingStateLock.unlock()
         }
     }
 
