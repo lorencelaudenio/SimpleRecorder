@@ -2653,28 +2653,28 @@ cameraAnimationLock.unlock()
             1 -
             eased
 
-        // Convert selected-display coordinates
-        // into final 1280x720 coordinates.
+        // Get current zoom state for accurate click positioning
+        zoomLock.lock()
+        let currentZoomRect = currentSourceRect
+        zoomLock.unlock()
 
-        let normalizedX =
-            clickPoint.x /
-            displayBounds.width
+        // Calculate click position relative to current zoom area
+        // This ensures the red indicator appears exactly where clicked
+        // even when zoom is active
 
-        let normalizedY =
-            clickPoint.y /
-            displayBounds.height
+        // Convert click point from display coordinates to zoom-relative coordinates
+        let zoomX = clickPoint.x - currentZoomRect.origin.x
+        let zoomY = clickPoint.y - currentZoomRect.origin.y
 
-        let outputX =
-            normalizedX *
-            outputWidth
+        // Scale to output dimensions
+        let scaleX = outputWidth / currentZoomRect.width
+        let scaleY = outputHeight / currentZoomRect.height
 
-        let outputY =
-            normalizedY *
-            outputHeight
+        let outputX = zoomX * scaleX
+        let outputY = zoomY * scaleY
 
-        let radiusScale =
-            outputWidth /
-            displayBounds.width
+        // Radius scales with zoom level
+        let radiusScale = scaleX
 
         let outputRadius =
             radius *
